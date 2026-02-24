@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta http-equiv="refresh" content="0; url=/cast-manager/redesigned.html">
+  <title>Cast Manager</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      background: #000;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+      text-align: center;
+    }
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      animation: fadeIn 0.3s ease-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .icon {
+      font-size: 64px;
+      margin-bottom: 20px;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+    }
+    h1 {
+      font-size: 24px;
+      margin-bottom: 10px;
+      font-weight: 600;
+    }
+    .subtitle {
+      color: #888;
+      margin-bottom: 30px;
+      font-size: 16px;
+    }
+    .status {
+      color: #666;
+      font-size: 14px;
+      margin-bottom: 20px;
+    }
+    .btn {
+      display: inline-block;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: #fff;
+      padding: 16px 32px;
+      border-radius: 12px;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 16px;
+      border: none;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.15s;
+      min-width: 200px;
+      margin-bottom: 16px;
+    }
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4);
+    }
+    .btn:active {
+      transform: translateY(0);
+    }
+    .hint {
+      font-size: 12px;
+      color: #555;
+      margin-top: 20px;
+    }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid #222;
+      border-top-color: #6366f1;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-bottom: 20px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    // Immediate redirect on load
+    (function() {
+      // Use HTTPS for Telegram Mini App compatibility
+      const targetUrl = '/cast-manager/redesigned.html';
+      
+      // Initialize Telegram WebApp
+      let tg = null;
+      try {
+        tg = window.Telegram?.WebApp;
+        if (tg) {
+          tg.ready();
+          tg.expand();
+        }
+      } catch (e) {
+        console.log('Telegram WebApp not available');
+      }
+      
+      // Try redirect immediately using multiple methods
+      function doRedirect() {
+        // Method 1: Standard redirect (HTTPS - works in Mini App)
+        window.location.href = targetUrl;
+        
+        // Method 2: Replace (no history)
+        setTimeout(function() {
+          window.location.replace(targetUrl);
+        }, 50);
+        
+        // Method 3: Telegram-specific (preferred in Telegram)
+        if (tg && tg.openLink) {
+          setTimeout(function() {
+            tg.openLink(targetUrl);
+          }, 100);
+        }
+      }
+      
+      // Redirect as soon as possible
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', doRedirect);
+      } else {
+        doRedirect();
+      }
+      
+      // Also try on window load
+      window.addEventListener('load', doRedirect);
+      
+      // Hide spinner and show manual button after delay
+      setTimeout(function() {
+        const spinner = document.getElementById('spinner');
+        const status = document.getElementById('status');
+        const manualBtn = document.getElementById('manualBtn');
+        
+        if (spinner) spinner.classList.add('hidden');
+        if (status && !status.textContent.includes('Opened')) {
+          status.textContent = 'Tap below to open Cast Manager';
+          status.style.color = '#888';
+        }
+        if (manualBtn) manualBtn.classList.remove('hidden');
+      }, 2000);
+      
+      // Manual button click handler - opens INSIDE Mini App
+      window.openCastManager = function() {
+        // Use HTTPS (only option now)
+        window.location.href = targetUrl;
+        
+        // Telegram native method
+        if (tg && tg.openLink) {
+          tg.openLink(targetUrl);
+        }
+      };
+    })();
+  </script>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">🎭</div>
+    <h1>Cast Manager</h1>
+    <p class="subtitle">Switch between expert personas</p>
+    
+    <div id="spinner" class="spinner"></div>
+    <p id="status" class="status">Opening Cast Manager...</p>
+    
+    <button id="manualBtn" class="btn hidden" onclick="openCastManager()">
+      Open Cast Manager
+    </button>
+    
+    <p class="hint">If the app doesn't open automatically,<br>tap the button above</p>
+  </div>
+</body>
+</html>

@@ -1,0 +1,25 @@
+forgeVersion: "1"
+plugin:
+  id: "clawcast"
+  name: "ClawCast"
+  description: "ClawCast for OpenClaw: cast/persona management with shared context and Cast Manager UI"
+  kind: "standard"
+  surfaces: ["tools", "hooks", "gateway", "http", "cli", "channels", "providers", "services", "commands"]
+target:
+  openclawVersionRange: ">=2026.2.21-2 <2027.0.0"
+source:
+  type: "sdk"
+  path: "."
+  entrypoints: ["./dist/index.js"]
+mapping:
+  mode: "deterministic"
+  groundingProfile: "openclaw-plugin-templates-v1"
+  confidenceThreshold: 0.70
+safety:
+  sideEffectToolsOptional: true
+  strictSchema: true
+  enforceNameCollisionChecks: true
+distribution:
+  outputMode: "both"
+  npmScope: "@talhas-laboratory"
+  includePinHints: true

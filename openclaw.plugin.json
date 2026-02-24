@@ -1,0 +1,199 @@
+{
+  "id": "clawcast",
+  "name": "ClawCast",
+  "description": "ClawCast for OpenClaw: cast/persona management with shared context and Cast Manager UI",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "castsPath": {
+        "type": "string",
+        "default": "./casts"
+      },
+      "port": {
+        "type": "number",
+        "default": 3443
+      },
+      "autoStart": {
+        "type": "boolean",
+        "default": true
+      },
+      "defaultCast": {
+        "type": "string"
+      },
+      "retrieval": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "default": "hybrid-lite"
+          },
+          "rerank": {
+            "type": "string",
+            "default": "off"
+          },
+          "maxCandidates": {
+            "type": "number",
+            "default": 30
+          }
+        }
+      },
+      "catalog": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "reconcileOnMutation": {
+            "type": "boolean",
+            "default": true
+          },
+          "reconcileOnStartup": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "sharedConversation": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "maxItems": {
+            "type": "number",
+            "default": 200
+          },
+          "contextLimit": {
+            "type": "number",
+            "default": 8
+          },
+          "searchLimit": {
+            "type": "number",
+            "default": 4
+          },
+          "captureOnAutoCapture": {
+            "type": "boolean",
+            "default": true
+          },
+          "absorbScratchpadOnSwitch": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "contextV2": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "tokenBudget": {
+            "type": "number",
+            "default": 1800
+          },
+          "contractScope": {
+            "type": "string",
+            "default": "workspace"
+          },
+          "contractWriteMode": {
+            "type": "string",
+            "default": "explicit_nl"
+          },
+          "confidenceThresholds": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "contract": {
+                "type": "number",
+                "default": 0.9
+              },
+              "session": {
+                "type": "number",
+                "default": 0.75
+              },
+              "scratch": {
+                "type": "number",
+                "default": 0.4
+              }
+            }
+          },
+          "conflict": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "safety": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "redact": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "retrieval": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "default": "hybrid"
+              },
+              "vectorOptional": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "castsPath": {
+      "label": "Casts Directory",
+      "placeholder": "./casts"
+    },
+    "port": {
+      "label": "API Port"
+    },
+    "autoStart": {
+      "label": "Auto-start HTTP server"
+    },
+    "retrieval": {
+      "label": "Retrieval Settings"
+    },
+    "catalog": {
+      "label": "Catalog Reconciliation"
+    },
+    "sharedConversation": {
+      "label": "Shared Conversation Context"
+    },
+    "contextV2": {
+      "label": "Context Layer V2"
+    }
+  },
+  "miniApps": [
+    {
+      "path": "/cast-manager",
+      "title": "ClawCast Manager",
+      "description": "Manage AI agent personas"
+    }
+  ],
+  "entry": "dist/index.js"
+}

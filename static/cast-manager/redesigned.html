@@ -1,0 +1,2273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Cast Manager</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    // --- Cast Color Point Cloud Orb ---
+    const OrbFactory = (() => {
+      const activeOrbs = new Set();
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          const orb = Array.from(activeOrbs).find((o) => o.container === entry.target);
+          if (!orb) return;
+          orb.isVisible = entry.isIntersecting;
+          if (!orb.isVisible) {
+            orb.ctx.clearRect(0, 0, orb.width, orb.height);
+          }
+        });
+      }, { threshold: 0.02 });
+
+      const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+
+      function parseHex(hex) {
+        const match = String(hex || '').trim().match(/^#?([0-9a-f]{6})$/i);
+        if (!match) return { r: 79, g: 70, b: 229 };
+        const v = match[1];
+        return {
+          r: parseInt(v.slice(0, 2), 16),
+          g: parseInt(v.slice(2, 4), 16),
+          b: parseInt(v.slice(4, 6), 16)
+        };
+      }
+
+      function rgba(rgb, a) {
+        return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${clamp(a, 0, 1).toFixed(3)})`;
+      }
+
+      function buildSpherePoints(count, radius) {
+        const pts = [];
+        const golden = Math.PI * (3 - Math.sqrt(5));
+        for (let i = 0; i < count; i += 1) {
+          const t = (i + 0.5) / count;
+          const y = 1 - (2 * t);
+          const r = Math.sqrt(Math.max(0, 1 - (y * y)));
+          const theta = golden * i;
+          pts.push({
+            x: Math.cos(theta) * r * radius,
+            y: y * radius,
+            z: Math.sin(theta) * r * radius,
+            phase: Math.random() * Math.PI * 2
+          });
+        }
+        return pts;
+      }
+
+      function createOrbScene(container, colorHex) {
+        const canvas = document.createElement('canvas');
+        container.appendChild(canvas);
+        const ctx = canvas.getContext('2d');
+
+        const small = window.matchMedia('(max-width: 760px)').matches;
+        const pointCount = small ? 38 : 52;
+        const radius = small ? 56 : 66;
+        const nodes = buildSpherePoints(pointCount, radius);
+        const projected = Array.from({ length: nodes.length }, () => ({
+          x: 0,
+          y: 0,
+          z: 0,
+          depth: 0,
+          alpha: 0
+        }));
+
+        const state = {
+          container,
+          canvas,
+          ctx,
+          rgb: parseHex(colorHex),
+          nodes,
+          projected,
+          isVisible: false,
+          parallaxOffset: 0,
+          width: 0,
+          height: 0
+        };
+
+        container._orbState = state;
+        activeOrbs.add(state);
+        observer.observe(container);
+
+        return {
+          destroy: () => {
+            activeOrbs.delete(state);
+            observer.unobserve(container);
+          }
+        };
+      }
+
+      function update() {
+        const time = performance.now() * 0.001;
+        let hasVisible = false;
+        activeOrbs.forEach((state) => {
+          if (state.isVisible) hasVisible = true;
+        });
+
+        if (!hasVisible) {
+          requestAnimationFrame(update);
+          return;
+        }
+
+        const carousel = document.getElementById('castCarousel');
+        const movingFast = !!(carousel && carousel._isInteracting);
+
+        activeOrbs.forEach((state) => {
+          if (!state.isVisible) return;
+
+          const { container, canvas, ctx, nodes, projected, rgb } = state;
+          const width = container.offsetWidth;
+          const height = container.offsetHeight;
+
+          if (state.width !== width || state.height !== height) {
+            state.width = width;
+            state.height = height;
+            if (width > 0 && height > 0) {
+              const dpr = clamp(window.devicePixelRatio || 1, 1, 2);
+              canvas.width = Math.floor(width * dpr);
+              canvas.height = Math.floor(height * dpr);
+              ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+          }
+          if (state.width <= 0 || state.height <= 0) return;
+
+          ctx.clearRect(0, 0, state.width, state.height);
+
+          const centerX = state.width * 0.5;
+          const centerY = state.height * 0.5;
+          const pulse = 1 + Math.sin(time * 2.1) * 0.08;
+          const rotY = (time * 0.36) + (state.parallaxOffset || 0) * 0.85;
+          const rotX = (time * 0.18);
+          const cosY = Math.cos(rotY);
+          const sinY = Math.sin(rotY);
+          const cosX = Math.cos(rotX);
+          const sinX = Math.sin(rotX);
+
+          for (let i = 0; i < nodes.length; i += 1) {
+            const node = nodes[i];
+            const p = projected[i];
+
+            const jitter = 1 + Math.sin((time * 2.8) + node.phase) * 0.06;
+            const nx = node.x * pulse * jitter;
+            const ny = node.y * pulse * jitter;
+            const nz = node.z * pulse * jitter;
+
+            const x1 = (nx * cosY) - (nz * sinY);
+            const z1 = (nx * sinY) + (nz * cosY);
+            const y2 = (ny * cosX) - (z1 * sinX);
+            const z2 = (ny * sinX) + (z1 * cosX);
+
+            const perspective = 300 / (300 - z2);
+            p.x = (x1 * perspective) + centerX;
+            p.y = (y2 * perspective) + centerY;
+            p.z = z2;
+            p.depth = clamp((z2 + 96) / 192, 0, 1);
+            p.alpha = clamp((z2 + 76) / 166, 0, 1);
+          }
+
+          // Connections between nearby points (cast color only).
+          const threshold = movingFast ? 1450 : 1900;
+          for (let i = 0; i < projected.length; i += 1) {
+            const p1 = projected[i];
+            if (p1.alpha < 0.15) continue;
+            for (let j = i + 1; j < projected.length; j += 1) {
+              const p2 = projected[j];
+              if (p2.alpha < 0.15) continue;
+              const dx = p1.x - p2.x;
+              const dy = p1.y - p2.y;
+              const d2 = (dx * dx) + (dy * dy);
+              if (d2 > threshold) continue;
+
+              const closeness = 1 - (d2 / threshold);
+              const alpha = (movingFast ? 0.09 : 0.16) * closeness * ((p1.alpha + p2.alpha) * 0.5);
+              ctx.strokeStyle = rgba(rgb, alpha);
+              ctx.lineWidth = movingFast ? 0.7 : 0.95;
+              ctx.beginPath();
+              ctx.moveTo(p1.x, p1.y);
+              ctx.lineTo(p2.x, p2.y);
+              ctx.stroke();
+            }
+          }
+
+          // Points.
+          for (let i = 0; i < projected.length; i += 1) {
+            const p = projected[i];
+            if (p.alpha < 0.1) continue;
+            const size = 0.8 + (p.depth * 2.0);
+            ctx.fillStyle = rgba(rgb, (movingFast ? 0.55 : 0.82) * p.alpha);
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        });
+
+        requestAnimationFrame(update);
+      }
+
+      update();
+      return { createOrbScene };
+    })();
+  </script>
+  <style>
+    :root {
+      /* Clinical Industrial Theme */
+      --bg: #E5E5E5; /* Surface */
+      --surface: #E5E5E5;
+      --surface-strong: #E5E5E5;
+      --ink: #000000; /* Primary Ink */
+      --muted: #404040; /* Secondary Ink */
+      --line: #000000; /* Sharp Borders */
+      --shadow: none; /* No soft shadows */
+      --radius-xl: 0px;
+      --radius-lg: 0px;
+      --radius-md: 0px;
+      --radius-sm: 0px;
+      --accent: #000000;
+      --success: #000000;
+      --danger: #000000;
+      --warning: #000000;
+      
+      --font-stack: "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--font-stack);
+      color: var(--ink);
+      background-color: var(--bg);
+      background-image: none;
+      min-height: 100vh;
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+      overflow-x: hidden;
+      width: 100%;
+      max-width: 100vw;
+    }
+
+    .app {
+      width: 100%;
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 10px 14px 28px;
+      overflow-x: hidden;
+    }
+
+    .glass {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      box-shadow: none;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-radius: 0;
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 24px;
+      border-bottom: 1.5px solid var(--line);
+    }
+
+    .icon-btn {
+      border: 1px solid var(--line);
+      border-radius: 0;
+      background: #fff;
+      color: var(--ink);
+      min-width: 40px;
+      height: 40px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: none;
+    }
+
+    .icon-btn:active { background: #000; color: #fff; }
+    .icon-btn.danger {
+      background: #000;
+      color: #fff;
+    }
+
+    .topbar-title {
+      min-width: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      line-height: 1.1;
+    }
+
+    .topbar-title strong {
+      font-size: 1.2rem;
+      text-transform: uppercase;
+      font-weight: 800;
+    }
+
+    .topbar-title span {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+    }
+
+    .save-state {
+      padding: 4px 10px;
+      border-radius: 0;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      background: #000;
+      border: 1px solid var(--line);
+      color: #fff;
+    }
+
+    .save-state.saving { background: #fff; color: #000; }
+    .save-state.saved { background: #000; color: #fff; }
+    .save-state.error { background: red; color: #fff; }
+
+    .view { display: none; min-width: 0; }
+    .view.active { display: block; overflow-x: hidden; }
+
+    /* Clinical Picker Head */
+    .picker-head {
+      padding: 24px 7.5vw;
+      margin-bottom: 0;
+      border-bottom: 1.5px solid var(--line);
+    }
+
+    .picker-head h1 {
+      margin: 0;
+      font-size: 3.15rem;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+
+    .picker-head p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Barcode Anchor */
+    .clinical-footer {
+      padding: 40px 7.5vw;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .footer-actions {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .footer-action-btn {
+      border: 1.5px solid #000;
+      background: #fff;
+      color: #000;
+      padding: 8px 14px;
+      font-size: 0.68rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      cursor: pointer;
+    }
+
+    .barcode {
+      width: 100%;
+      height: 60px;
+      background: repeating-linear-gradient(
+        90deg,
+        #000,
+        #000 2px,
+        transparent 2px,
+        transparent 4px,
+        #000 4px,
+        #000 5px,
+        transparent 5px,
+        transparent 9px
+      );
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      width: 100%;
+    }
+
+    .led-group {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+
+    .led {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #000;
+    }
+
+    .led.green {
+      background: #00ff41;
+      box-shadow: 0 0 10px #00ff41;
+      border: 1px solid #000;
+    }
+
+    .carousel-wrap {
+      padding: 40px 0 0 0;
+    }
+
+    .cast-carousel {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 15vw;
+      overflow-x: auto;
+      padding: 20px 7.5vw;
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+      align-items: center;
+      min-height: 60vh;
+      scroll-behavior: smooth;
+      overscroll-behavior-x: contain;
+      scroll-padding-left: 7.5vw;
+      scroll-padding-right: 7.5vw;
+    }
+
+    .cast-carousel.is-snapping .cast-tile {
+      transition: transform 190ms ease, opacity 190ms ease;
+    }
+
+    .cast-carousel::-webkit-scrollbar { height: 8px; }
+    .cast-carousel::-webkit-scrollbar-thumb {
+      background: rgba(90, 107, 132, 0.35);
+      border-radius: 999px;
+    }
+
+    .cast-tile {
+      scroll-snap-align: center;
+      flex: 0 0 85vw;
+      border: none;
+      background: transparent;
+      padding: 0; /* Let brackets define the bounds */
+      text-align: center;
+      cursor: pointer;
+      transition: transform 160ms ease, opacity 160ms ease;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      max-width: 450px;
+      margin: 0 auto;
+      opacity: 0.75;
+    }
+
+    .cast-tile.is-focused {
+      opacity: 1;
+      transform: translateY(-2px) scale(1.01);
+    }
+
+    /* The Bracket Frame */
+    .cast-tile::before,
+    .cast-tile::after {
+      content: "";
+      position: absolute;
+      width: 60px;
+      height: 60px;
+      border: 1.5px solid var(--line);
+      pointer-events: none;
+      z-index: 5;
+    }
+    /* Top Left Bracket - Above and outside the orb */
+    .cast-tile::before {
+      top: -20px;
+      left: -10px;
+      border-right: 0;
+      border-bottom: 0;
+    }
+    /* Bottom Right Bracket - Below and outside the text */
+    .cast-tile::after {
+      bottom: -20px;
+      right: -10px;
+      border-left: 0;
+      border-top: 0;
+    }
+
+    .cast-tile:hover { 
+      transform: translateY(-2px); 
+      box-shadow: none;
+    }
+    .cast-tile:active { transform: scale(0.98); }
+
+    .cast-orb {
+      --cast-color: #4f46e5;
+      width: 75vw; /* Slightly smaller than tile width */
+      height: 75vw;
+      max-width: 380px;
+      max-height: 380px;
+      border-radius: 50%;
+      position: relative;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      display: grid;
+      place-items: center;
+      margin: 0 auto;
+    }
+
+    .cast-orb::before,
+    .cast-orb::after {
+      display: none;
+    }
+
+    .cast-orb canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      pointer-events: none;
+      will-change: transform;
+      /* Prevent repaints */
+      backface-visibility: hidden;
+      transform: translateZ(0);
+    }
+
+    .cast-name {
+      max-width: 240px;
+      font-size: 1.75rem;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      color: var(--ink);
+      text-transform: uppercase;
+      line-height: 0.9;
+      margin-top: 20px;
+      white-space: normal;
+      text-shadow: none;
+      /* Shift bit to the right */
+      transform: translateX(20px);
+    }
+
+    .cast-sub {
+      font-size: 0.6rem;
+      font-weight: 500;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      border: 1px solid var(--ink);
+      padding: 4px 8px;
+      margin-top: 12px;
+      display: inline-block;
+      max-width: none;
+      /* Match name shift */
+      transform: translateX(20px);
+    }
+
+    .create-tile .cast-orb {
+      width: 40vw; /* Keep smaller size */
+      height: 40vw;
+      max-width: 200px;
+      max-height: 200px;
+      background:
+        radial-gradient(circle at 35% 30%, rgba(255,255,255,0.92), rgba(255,255,255,0.38) 25%, transparent 35%),
+        linear-gradient(140deg, #b8c2d8, #7f8ba6);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.55), 0 10px 24px rgba(46, 62, 94, 0.24);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      animation: none;
+    }
+
+    .create-tile .glyph {
+      font-size: 5rem; /* Keep massive + */
+      font-weight: 400;
+      line-height: 1;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    }
+
+    .create-tile .cast-orb::before,
+    .create-tile .cast-orb::after {
+      display: none;
+    }
+
+    /* Editor */
+    /* Editor Layout */
+    .editor-shell {
+      display: grid;
+      gap: 0;
+      border: 1.5px solid var(--line);
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+
+    .tabbar {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0;
+      border-radius: 0;
+      padding: 0;
+      background: #000;
+      border-bottom: 1.5px solid var(--line);
+    }
+
+    .tab-btn {
+      border: none;
+      border-right: 1px solid rgba(255,255,255,0.2);
+      border-radius: 0;
+      padding: 16px 8px;
+      background: transparent;
+      color: #fff;
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: none;
+    }
+    .tab-btn:last-child { border-right: none; }
+
+    .tab-btn.active {
+      color: #000;
+      background: #fff;
+    }
+
+    .panel {
+      display: none;
+      border-radius: 0;
+      padding: 24px;
+      background: #fff;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+
+    .panel.active { display: block; }
+
+    .stack { display: grid; gap: 20px; }
+
+    .field-label {
+      font-size: 0.75rem;
+      color: var(--ink);
+      font-weight: 700;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    .input,
+    .textarea,
+    .search-input {
+      width: 100%;
+      border: 1.5px solid var(--line);
+      background: #fff;
+      border-radius: 0;
+      padding: 12px;
+      font-size: 0.9rem;
+      color: var(--ink);
+      outline: none;
+      transition: none;
+    }
+
+    .input:focus,
+    .textarea:focus,
+    .search-input:focus {
+      background: #f0f0f0;
+    }
+
+    .textarea {
+      min-height: 300px;
+      resize: vertical;
+      line-height: 1.5;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    .persona-row {
+      display: grid;
+      grid-template-columns: 1fr 120px;
+      gap: 16px;
+      align-items: end;
+    }
+
+    .color-input {
+      width: 100%;
+      height: 48px;
+      border: 1.5px solid var(--line);
+      border-radius: 0;
+      background: #fff;
+      padding: 2px;
+      cursor: pointer;
+    }
+
+    /* Library & Tools Toolbar */
+    .lib-toolbar, .tools-top {
+      display: flex;
+      gap: 0;
+      flex-wrap: nowrap;
+      margin-bottom: 16px;
+      border: 1px solid var(--line);
+      max-width: 100%;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+    }
+
+    .pill-btn {
+      border: none;
+      border-right: 1px solid var(--line);
+      border-radius: 0;
+      background: #fff;
+      color: var(--ink);
+      padding: 10px 16px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      cursor: pointer;
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+    .pill-btn:last-child { border-right: none; }
+
+    .pill-btn.active {
+      color: #fff;
+      background: #000;
+    }
+
+    .crumbs {
+      border-radius: 0;
+      border: 1px solid var(--line);
+      padding: 10px 16px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: #f5f5f5;
+      margin-bottom: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .crumb-link {
+      cursor: pointer;
+      color: #000;
+      text-decoration: underline;
+    }
+
+    .lib-list, .tool-list {
+      display: grid;
+      gap: 0;
+      border: 1px solid var(--line);
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow-x: hidden;
+    }
+
+    .file-row, .tool-row {
+      border: none;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 12px 16px;
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+    .file-row:last-child, .tool-row:last-child { border-bottom: none; }
+
+    .tool-row.enabled {
+      background: #f0f0f0;
+    }
+
+    .file-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 0;
+      border: 1px solid var(--line);
+      display: grid;
+      place-items: center;
+      background: #fff;
+      font-size: 18px;
+    }
+
+    .file-main, .tool-main {
+      min-width: 0;
+      flex: 1;
+      cursor: pointer;
+      max-width: 100%;
+      overflow: hidden;
+    }
+
+    .file-main strong, .tool-main strong {
+      display: block;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      font-weight: 700;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .file-main span, .tool-main p, .tool-main code {
+      display: block;
+      font-size: 0.7rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .mini-btn, .toggle-btn {
+      border: 1px solid var(--line);
+      border-radius: 0;
+      background: #fff;
+      color: var(--ink);
+      padding: 6px 12px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    .toggle-btn.enabled { background: #000; color: #fff; }
+
+    .fab {
+      position: fixed;
+      right: 24px;
+      bottom: calc(24px + env(safe-area-inset-bottom));
+      width: 64px;
+      height: 64px;
+      border-radius: 0;
+      border: 2px solid var(--line);
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 32px;
+      background: #000;
+      box-shadow: none;
+      cursor: pointer;
+      z-index: 30;
+    }
+
+    .fab.hidden { display: none; }
+
+    /* Tools */
+    .tools-top {
+      display: flex;
+      gap: 0;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+      border: 1px solid var(--line);
+    }
+
+    .hint {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .tool-list {
+      display: grid;
+      gap: 0;
+      border: 1px solid var(--line);
+    }
+
+    .tool-row {
+      border: none;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      background: #fff;
+      padding: 12px 16px;
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+    }
+    .tool-row:last-child { border-bottom: none; }
+
+    .tool-row.enabled {
+      background: #f0f0f0;
+    }
+
+    .tool-main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .tool-main strong {
+      display: block;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+
+    .tool-main code {
+      display: block;
+      font-size: 0.65rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    .tool-main p {
+      margin: 0;
+      font-size: 0.7rem;
+      color: var(--muted);
+      line-height: 1.35;
+      text-transform: none; /* Keep description legible */
+    }
+
+    .toggle-btn {
+      border: 1px solid var(--line);
+      border-radius: 0;
+      background: #fff;
+      color: var(--ink);
+      padding: 7px 10px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+      text-transform: uppercase;
+    }
+
+    .toggle-btn.enabled {
+      color: #fff;
+      background: #000;
+    }
+
+    .empty {
+      border: 1px dashed var(--line);
+      border-radius: 0;
+      padding: 32px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      background: #fff;
+    }
+
+    .warning {
+      margin-top: 16px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #fff;
+      background: red;
+      border: none;
+      border-radius: 0;
+      padding: 12px;
+    }
+
+    .create-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      z-index: 40;
+    }
+
+    .create-modal.show { display: flex; }
+
+    .create-card {
+      width: min(480px, 100%);
+      border-radius: 0;
+      padding: 32px;
+      background: #E5E5E5;
+      border: 2px solid #000;
+    }
+
+    .create-card h3 {
+      margin: 0 0 24px;
+      font-size: 2rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: -0.04em;
+    }
+
+    .create-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-top: 32px;
+    }
+
+    .context-sheet-card {
+      width: min(760px, 96vw);
+    }
+
+    .context-meta {
+      border: 1.5px solid #000;
+      padding: 8px 10px;
+      font-size: 0.66rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #222;
+      background: #f2f2f2;
+    }
+
+    .context-sheet-area {
+      min-height: 220px;
+    }
+
+    .context-prompt-area {
+      min-height: 120px;
+    }
+
+    .btn {
+      border: 1.5px solid var(--line);
+      border-radius: 0;
+      background: #fff;
+      color: #000;
+      padding: 12px 24px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+
+    .btn.primary {
+      background: #000;
+      color: #fff;
+    }
+
+    @media (max-width: 760px) {
+      .app { padding: 8px 10px 26px; }
+      .cast-tile { flex: 0 0 126px; }
+      .topbar { top: 6px; }
+      .persona-row { grid-template-columns: 1fr 86px; }
+      .panel { padding: 14px; }
+      .file-row, .tool-row { padding: 10px 10px; gap: 10px; }
+      .file-main strong, .tool-main strong {
+        font-size: 0.78rem;
+      }
+      .file-main span, .tool-main p, .tool-main code {
+        font-size: 0.66rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header id="topbar" class="topbar glass" style="display:none;">
+      <button id="backBtn" class="icon-btn" style="display:none;" type="button">←</button>
+      <div class="topbar-title">
+        <strong id="titleMain">Cast Manager</strong>
+        <span id="titleSub">Choose a cast to edit</span>
+      </div>
+      <button id="deleteCastBtn" class="icon-btn danger" style="display:none;" type="button" title="Delete cast">✕</button>
+    </header>
+
+    <section id="pickerView" class="view active">
+      <div class="picker-head">
+        <h1>Cast Picker</h1>
+        <p>Select a cast node to enter management. New casts can be created instantly.</p>
+      </div>
+      <div class="carousel-wrap">
+        <div id="castCarousel" class="cast-carousel"></div>
+      </div>
+      
+      <div class="clinical-footer">
+        <div class="status-row">
+          <div class="led-group">
+            <div style="border: 1.5px solid #000; padding: 2px 8px; font-size: 0.75rem; font-weight: 800;">AVAILABLE CASTS</div>
+            <span id="footerNodeCount" style="font-size: 1.2rem; font-weight: 800;">--</span>
+          </div>
+          <div class="led-group">
+            <div style="border: 1.5px solid #000; padding: 2px 8px; font-size: 0.75rem; font-weight: 800;">STATUS</div>
+            <div class="led green"></div>
+          </div>
+        </div>
+        <div class="barcode"></div>
+        <div class="footer-actions">
+          <button id="openSharedSheetBtn" class="footer-action-btn" type="button">Shared Context Sheet</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="editorView" class="view">
+      <div class="editor-shell">
+        <div class="tabbar glass">
+          <button class="tab-btn active" data-tab="persona" type="button">Persona</button>
+          <button class="tab-btn" data-tab="library" type="button">Library</button>
+          <button class="tab-btn" data-tab="tools" type="button">Tools</button>
+        </div>
+
+        <div id="panelPersona" class="panel glass active">
+          <div class="stack">
+            <div class="persona-row">
+              <div>
+                <label class="field-label" for="personaName">Cast Name</label>
+                <input id="personaName" class="input" type="text" placeholder="Cast name">
+              </div>
+              <div>
+                <label class="field-label" for="personaColor">Color</label>
+                <input id="personaColor" class="color-input" type="color" value="#4f46e5">
+              </div>
+            </div>
+            <div>
+              <label class="field-label" for="personaPrompt">System Prompt</label>
+              <textarea id="personaPrompt" class="textarea" placeholder="Define this cast's system prompt..."></textarea>
+            </div>
+            <div class="hint">Changes are saved automatically.</div>
+          </div>
+        </div>
+
+        <div id="panelLibrary" class="panel glass">
+          <div class="lib-toolbar">
+            <button class="pill-btn active" data-root="documents-hub" type="button">Documents</button>
+            <button id="createFolderBtn" class="pill-btn" type="button">New Folder</button>
+            <button id="refreshLibraryBtn" class="pill-btn" type="button">Refresh</button>
+          </div>
+          <div id="crumbs" class="crumbs"></div>
+          <div id="libraryList" class="lib-list"></div>
+        </div>
+
+        <div id="panelTools" class="panel glass">
+          <div class="tools-top">
+            <button id="allowAllToolsBtn" class="pill-btn" type="button">Allow All</button>
+            <button id="refreshToolsBtn" class="pill-btn" type="button">Refresh</button>
+          </div>
+          <div id="toolModeHint" class="hint">Loading tools…</div>
+          <input id="toolSearch" class="search-input" type="text" placeholder="Search tools">
+          <div id="toolsList" class="tool-list"></div>
+          <div id="toolWarning" class="warning" style="display:none;"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <button id="uploadFab" class="fab hidden" type="button" title="Add documents">+</button>
+  <input id="uploadInput" type="file" multiple style="display:none;">
+
+  <div id="createModal" class="create-modal">
+    <div class="create-card glass">
+      <h3>Create Cast</h3>
+      <div class="stack">
+        <div>
+          <label class="field-label" for="createCastName">Cast Name</label>
+          <input id="createCastName" class="input" type="text" placeholder="e.g. Product Strategist">
+        </div>
+        <div>
+          <label class="field-label" for="createCastColor">Color</label>
+          <input id="createCastColor" class="color-input" type="color" value="#4f46e5">
+        </div>
+      </div>
+      <div class="create-actions">
+        <button id="cancelCreateBtn" class="btn" type="button">Cancel</button>
+        <button id="confirmCreateBtn" class="btn primary" type="button">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="contextSheetModal" class="create-modal">
+    <div class="create-card glass context-sheet-card">
+      <h3>Shared Context Sheet</h3>
+      <div id="contextSheetMeta" class="context-meta">Loading context sheet…</div>
+      <div class="stack" style="margin-top: 12px;">
+        <div>
+          <label class="field-label" for="contextSheetText">Direct Edit</label>
+          <textarea id="contextSheetText" class="textarea context-sheet-area" placeholder="Shared context sheet text..."></textarea>
+        </div>
+        <div>
+          <label class="field-label" for="contextSheetPrompt">Prompt Edit</label>
+          <textarea id="contextSheetPrompt" class="textarea context-prompt-area" placeholder='Example: Replace "old rule" with "new rule" in shared context sheet'></textarea>
+          <div class="hint">Prompt edits are parsed and safety-filtered before write.</div>
+        </div>
+      </div>
+      <div class="create-actions">
+        <button id="closeContextSheetBtn" class="btn" type="button">Close</button>
+        <button id="applyContextPromptBtn" class="btn" type="button">Apply Prompt Edit</button>
+        <button id="saveContextSheetBtn" class="btn primary" type="button">Save Sheet</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- Telegram Integration ---
+    const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+    if (tg) {
+      tg.ready();
+      tg.expand();
+    }
+
+    // --- API discovery ---
+    const API_ENDPOINTS = ['', window.location.origin];
+    let API_BASE = '';
+
+    async function findWorkingEndpoint() {
+      for (const endpoint of API_ENDPOINTS) {
+        try {
+          console.log(`Checking endpoint: ${endpoint}/api/cast-manager`);
+          const response = await fetch(`${endpoint}/api/cast-manager`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'listCasts' })
+          });
+          if (response.ok) {
+            console.log(`Found working API base: ${endpoint}`);
+            API_BASE = endpoint;
+            return true;
+          }
+        } catch (e) {
+          console.error(`Endpoint ${endpoint} failed:`, e);
+        }
+      }
+      return false;
+    }
+
+    async function apiCall(action, params = {}) {
+      try {
+        const response = await fetch(`${API_BASE}/api/cast-manager`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, ...params })
+        });
+        const data = await response.json();
+        if (!data.success) {
+           console.error(`API Action ${action} failed:`, data.error);
+        }
+        return data;
+      } catch (error) {
+        console.error(`API Call ${action} Network Error:`, error);
+        return { success: false, error: String(error && error.message ? error.message : error) };
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function haptic(type = 'light') {
+      if (tg && tg.HapticFeedback) {
+        tg.HapticFeedback.impactOccurred(type);
+      }
+    }
+
+    function normalizeHexColor(value, fallback = '#4f46e5') {
+      const input = String(value || '').trim();
+      const match = input.match(/^#?([0-9a-fA-F]{6})$/);
+      return match ? `#${match[1].toLowerCase()}` : fallback;
+    }
+
+    function fallbackColor(seed) {
+      const palette = ['#4f46e5', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#ef4444', '#14b8a6'];
+      const text = String(seed || 'cast');
+      let hash = 0;
+      for (let i = 0; i < text.length; i += 1) {
+        hash = ((hash << 5) - hash) + text.charCodeAt(i);
+        hash |= 0;
+      }
+      return palette[Math.abs(hash) % palette.length];
+    }
+
+    function iconForFile(name) {
+      const n = String(name || '').toLowerCase();
+      if (n.endsWith('.md') || n.endsWith('.txt')) return '📝';
+      if (n.endsWith('.pdf')) return '📕';
+      if (n.endsWith('.json')) return '🧩';
+      if (n.endsWith('.csv') || n.endsWith('.tsv') || n.endsWith('.xlsx')) return '📊';
+      if (n.endsWith('.png') || n.endsWith('.jpg') || n.endsWith('.jpeg') || n.endsWith('.gif')) return '🖼️';
+      return '📄';
+    }
+
+    function formatBytes(bytes) {
+      const n = Number(bytes);
+      if (!Number.isFinite(n) || n < 0) return '—';
+      if (n < 1024) return `${n} B`;
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+      return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function formatTimestamp(value) {
+      if (!value) return 'Unknown';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return 'Unknown';
+      return date.toLocaleString();
+    }
+
+    // --- State ---
+    const state = {
+      casts: [],
+      selectedCastId: null,
+      activeTab: 'persona',
+      saveState: 'ready',
+      persona: { name: '', color: '#4f46e5', systemPrompt: '', loadedFor: null },
+      library: { root: 'documents-hub', path: 'documents-hub', items: [] },
+      tools: { mode: 'all', allowedTools: [], availableTools: [], missingTools: [] },
+      sharedSheet: { text: '', source: '', updatedAt: null },
+      toolsSaving: false,
+      activeOrbInstances: [] // Track instances for cleanup
+    };
+
+    let personaSaveTimer = null;
+
+    const el = {
+      pickerView: document.getElementById('pickerView'),
+      editorView: document.getElementById('editorView'),
+      castCarousel: document.getElementById('castCarousel'),
+      backBtn: document.getElementById('backBtn'),
+      deleteCastBtn: document.getElementById('deleteCastBtn'),
+      titleMain: document.getElementById('titleMain'),
+      titleSub: document.getElementById('titleSub'),
+      saveState: document.getElementById('saveState'),
+      uploadFab: document.getElementById('uploadFab'),
+      uploadInput: document.getElementById('uploadInput'),
+      personaName: document.getElementById('personaName'),
+      personaColor: document.getElementById('personaColor'),
+      personaPrompt: document.getElementById('personaPrompt'),
+      tabButtons: Array.from(document.querySelectorAll('.tab-btn[data-tab]')),
+      panelPersona: document.getElementById('panelPersona'),
+      panelLibrary: document.getElementById('panelLibrary'),
+      panelTools: document.getElementById('panelTools'),
+      rootButtons: Array.from(document.querySelectorAll('.pill-btn[data-root]')),
+      createFolderBtn: document.getElementById('createFolderBtn'),
+      refreshLibraryBtn: document.getElementById('refreshLibraryBtn'),
+      crumbs: document.getElementById('crumbs'),
+      libraryList: document.getElementById('libraryList'),
+      allowAllToolsBtn: document.getElementById('allowAllToolsBtn'),
+      refreshToolsBtn: document.getElementById('refreshToolsBtn'),
+      toolModeHint: document.getElementById('toolModeHint'),
+      toolSearch: document.getElementById('toolSearch'),
+      toolsList: document.getElementById('toolsList'),
+      toolWarning: document.getElementById('toolWarning'),
+      createModal: document.getElementById('createModal'),
+      createCastName: document.getElementById('createCastName'),
+      createCastColor: document.getElementById('createCastColor'),
+      cancelCreateBtn: document.getElementById('cancelCreateBtn'),
+      confirmCreateBtn: document.getElementById('confirmCreateBtn'),
+      footerNodeCount: document.getElementById('footerNodeCount'),
+      openSharedSheetBtn: document.getElementById('openSharedSheetBtn'),
+      contextSheetModal: document.getElementById('contextSheetModal'),
+      contextSheetMeta: document.getElementById('contextSheetMeta'),
+      contextSheetText: document.getElementById('contextSheetText'),
+      contextSheetPrompt: document.getElementById('contextSheetPrompt'),
+      closeContextSheetBtn: document.getElementById('closeContextSheetBtn'),
+      saveContextSheetBtn: document.getElementById('saveContextSheetBtn'),
+      applyContextPromptBtn: document.getElementById('applyContextPromptBtn')
+    };
+
+    function setSaveState(mode, text) {
+      state.saveState = mode;
+      if (!el.saveState) return;
+      el.saveState.classList.remove('saving', 'saved', 'error');
+      if (mode === 'saving') el.saveState.classList.add('saving');
+      if (mode === 'saved') el.saveState.classList.add('saved');
+      if (mode === 'error') el.saveState.classList.add('error');
+      el.saveState.textContent = text;
+    }
+
+    function showPickerView() {
+      state.selectedCastId = null;
+      el.pickerView.classList.add('active');
+      el.editorView.classList.remove('active');
+      // Hide topbar in picker view
+      document.getElementById('topbar').style.display = 'none';
+      if (el.deleteCastBtn) el.deleteCastBtn.style.display = 'none';
+      
+      el.uploadFab.classList.add('hidden');
+      setSaveState('ready', 'Ready');
+      renderCastCarousel();
+    }
+
+    function getSelectedCast() {
+      return state.casts.find((cast) => cast.id === state.selectedCastId) || null;
+    }
+
+    function showEditorView(castId) {
+      state.selectedCastId = castId;
+      el.pickerView.classList.remove('active');
+      el.editorView.classList.add('active');
+      // Show topbar in editor view
+      document.getElementById('topbar').style.display = 'flex';
+      el.backBtn.style.display = 'inline-flex';
+      if (el.deleteCastBtn) el.deleteCastBtn.style.display = 'inline-flex';
+      
+      setActiveTab('persona');
+      const cast = getSelectedCast();
+      if (cast) {
+        el.titleMain.textContent = cast.name;
+        el.titleSub.innerHTML = `<div style="border: 1px solid #000; padding: 2px 6px; display: inline-block; font-size: 0.6rem;">ID: ${cast.id}</div>`;
+        document.documentElement.style.setProperty('--accent', normalizeHexColor(cast.color, fallbackColor(cast.id)));
+      }
+      loadPersona();
+      loadLibrary(state.library.root);
+      loadTools();
+      setSaveState('ready', 'Ready');
+    }
+
+    function renderCastCarousel() {
+      if (!el.castCarousel) return;
+
+      if (el.castCarousel._castFocusTimer) {
+        clearTimeout(el.castCarousel._castFocusTimer);
+        el.castCarousel._castFocusTimer = null;
+      }
+      if (el.castCarousel._castScrollHandler) {
+        el.castCarousel.removeEventListener('scroll', el.castCarousel._castScrollHandler);
+        el.castCarousel._castScrollHandler = null;
+      }
+      if (el.castCarousel._castTouchStartHandler) {
+        el.castCarousel.removeEventListener('touchstart', el.castCarousel._castTouchStartHandler);
+        el.castCarousel._castTouchStartHandler = null;
+      }
+      if (el.castCarousel._castTouchEndHandler) {
+        el.castCarousel.removeEventListener('touchend', el.castCarousel._castTouchEndHandler);
+        el.castCarousel._castTouchEndHandler = null;
+      }
+      if (el.castCarousel._castPointerUpHandler) {
+        el.castCarousel.removeEventListener('pointerup', el.castCarousel._castPointerUpHandler);
+        el.castCarousel._castPointerUpHandler = null;
+      }
+      if (el.castCarousel._castWheelHandler) {
+        el.castCarousel.removeEventListener('wheel', el.castCarousel._castWheelHandler);
+        el.castCarousel._castWheelHandler = null;
+      }
+      if (el.castCarousel._castSnapTimer) {
+        clearTimeout(el.castCarousel._castSnapTimer);
+        el.castCarousel._castSnapTimer = null;
+      }
+      if (el.castCarousel._castSnapEndTimer) {
+        clearTimeout(el.castCarousel._castSnapEndTimer);
+        el.castCarousel._castSnapEndTimer = null;
+      }
+      el.castCarousel.classList.remove('is-snapping');
+
+      // Cleanup old orbs
+      if (state.activeOrbInstances) {
+        state.activeOrbInstances.forEach(orb => orb.destroy());
+        state.activeOrbInstances = [];
+      }
+
+      const tiles = state.casts.map((cast) => {
+        const color = normalizeHexColor(cast.color, fallbackColor(cast.id));
+        const glyph = cast.emoji || '●';
+        return `
+          <button class="cast-tile" type="button" data-cast-id="${escapeHtml(cast.id)}">
+            <div class="cast-orb" data-color="${color}"></div>
+            <div class="cast-name">${escapeHtml(cast.name || cast.id)}</div>
+            <div class="cast-sub">${escapeHtml(cast.id)}</div>
+          </button>
+        `;
+      }).join('');
+
+      el.castCarousel.innerHTML = `${tiles}
+        <button class="cast-tile create-tile" type="button" id="addCastTile">
+          <div class="cast-orb"><span class="glyph">+</span></div>
+          <div class="cast-name">Create Cast</div>
+          <div class="cast-sub">Add instantly</div>
+        </button>
+      `;
+
+      // Initialize orbs and apply light-weight focus updates.
+      requestAnimationFrame(() => {
+        const carousel = el.castCarousel;
+        if (!carousel) return;
+
+        carousel.querySelectorAll('.cast-orb[data-color]').forEach(orb => {
+          const instance = OrbFactory.createOrbScene(orb, orb.dataset.color);
+          state.activeOrbInstances.push(instance);
+        });
+
+        const getNearestTile = () => {
+          const tiles = Array.from(carousel.querySelectorAll('.cast-tile'));
+          if (!tiles.length) return { tile: null, targetLeft: carousel.scrollLeft };
+          const center = carousel.scrollLeft + (carousel.clientWidth / 2);
+          let nearest = null;
+          let nearestDistance = Number.POSITIVE_INFINITY;
+
+          tiles.forEach((tile) => {
+            const tileCenter = tile.offsetLeft + (tile.offsetWidth / 2);
+            const distance = Math.abs(tileCenter - center);
+            if (distance < nearestDistance) {
+              nearest = tile;
+              nearestDistance = distance;
+            }
+
+            const orb = tile.querySelector('.cast-orb');
+            if (orb && orb._orbState) {
+              const normalized = (tileCenter - center) / Math.max(carousel.clientWidth, 1);
+              orb._orbState.parallaxOffset = Math.max(-0.95, Math.min(0.95, normalized * -1.25));
+            }
+          });
+
+          const targetRaw = nearest ? (nearest.offsetLeft + (nearest.offsetWidth / 2) - (carousel.clientWidth / 2)) : carousel.scrollLeft;
+          const maxScrollLeft = Math.max(0, carousel.scrollWidth - carousel.clientWidth);
+          const targetLeft = Math.max(0, Math.min(maxScrollLeft, targetRaw));
+          return { tile: nearest, targetLeft };
+        };
+
+        const applyFocus = () => {
+          const { tile: nearest } = getNearestTile();
+          const tiles = Array.from(carousel.querySelectorAll('.cast-tile'));
+          tiles.forEach((tile) => {
+            tile.classList.toggle('is-focused', tile === nearest);
+          });
+        };
+
+        const snapToNearest = () => {
+          const { targetLeft } = getNearestTile();
+          if (Math.abs(targetLeft - carousel.scrollLeft) < 2) {
+            carousel.classList.remove('is-snapping');
+            carousel._isInteracting = false;
+            window.requestAnimationFrame(applyFocus);
+            return;
+          }
+          carousel._isInteracting = true;
+          carousel.classList.add('is-snapping');
+          carousel.scrollTo({ left: targetLeft, behavior: 'smooth' });
+          if (carousel._castSnapEndTimer) clearTimeout(carousel._castSnapEndTimer);
+          carousel._castSnapEndTimer = setTimeout(() => {
+            carousel.classList.remove('is-snapping');
+            carousel._isInteracting = false;
+            window.requestAnimationFrame(applyFocus);
+          }, 210);
+        };
+
+        const scheduleSnap = (delay = 90) => {
+          if (carousel._castSnapTimer) clearTimeout(carousel._castSnapTimer);
+          carousel._castSnapTimer = setTimeout(() => {
+            window.requestAnimationFrame(snapToNearest);
+          }, delay);
+        };
+
+        const onScroll = () => {
+          carousel._isInteracting = true;
+          if (carousel._castFocusTimer) clearTimeout(carousel._castFocusTimer);
+          carousel._castFocusTimer = setTimeout(() => {
+            window.requestAnimationFrame(applyFocus);
+          }, 72);
+          scheduleSnap(96);
+        };
+
+        const onTouchStart = () => {
+          carousel._isInteracting = true;
+          carousel.classList.remove('is-snapping');
+          if (carousel._castSnapTimer) clearTimeout(carousel._castSnapTimer);
+          if (carousel._castSnapEndTimer) clearTimeout(carousel._castSnapEndTimer);
+        };
+        const onTouchEnd = () => {
+          if (carousel._castFocusTimer) clearTimeout(carousel._castFocusTimer);
+          carousel._castFocusTimer = setTimeout(() => window.requestAnimationFrame(applyFocus), 48);
+          scheduleSnap(72);
+        };
+        const onPointerUp = () => scheduleSnap(72);
+        const onWheel = () => scheduleSnap(120);
+
+        carousel._castScrollHandler = onScroll;
+        carousel._castTouchStartHandler = onTouchStart;
+        carousel._castTouchEndHandler = onTouchEnd;
+        carousel._castPointerUpHandler = onPointerUp;
+        carousel._castWheelHandler = onWheel;
+        carousel.addEventListener('scroll', onScroll, { passive: true });
+        carousel.addEventListener('touchstart', onTouchStart, { passive: true });
+        carousel.addEventListener('touchend', onTouchEnd, { passive: true });
+        carousel.addEventListener('pointerup', onPointerUp, { passive: true });
+        carousel.addEventListener('wheel', onWheel, { passive: true });
+
+        applyFocus();
+      });
+
+      Array.from(el.castCarousel.querySelectorAll('[data-cast-id]')).forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const castId = btn.getAttribute('data-cast-id');
+          if (!castId) return;
+          haptic('medium');
+          showEditorView(castId);
+        });
+      });
+
+      const addTile = document.getElementById('addCastTile');
+      if (addTile) {
+        addTile.addEventListener('click', () => {
+          haptic('medium');
+          openCreateModal();
+        });
+      }
+    }
+
+    async function loadCasts() {
+      const result = await apiCall('listCasts');
+      if (!result.success) {
+        el.castCarousel.innerHTML = `<div class="empty">Failed to load casts: ${escapeHtml(result.error || 'unknown error')}</div>`;
+        return false;
+      }
+      state.casts = (Array.isArray(result.casts) ? result.casts : []).map((cast) => ({
+        id: cast.id,
+        name: cast.name || cast.id,
+        emoji: cast.emoji || '●',
+        color: normalizeHexColor(cast.color, fallbackColor(cast.id)),
+        description: cast.description || ''
+      }));
+
+      // Update Clinical Footer
+      if (el.footerNodeCount) {
+        el.footerNodeCount.textContent = String(state.casts.length).padStart(2, '0');
+      }
+
+      renderCastCarousel();
+      return true;
+    }
+
+    function setActiveTab(tab) {
+      state.activeTab = tab;
+      el.tabButtons.forEach((btn) => {
+        const on = btn.getAttribute('data-tab') === tab;
+        btn.classList.toggle('active', on);
+      });
+      el.panelPersona.classList.toggle('active', tab === 'persona');
+      el.panelLibrary.classList.toggle('active', tab === 'library');
+      el.panelTools.classList.toggle('active', tab === 'tools');
+      el.uploadFab.classList.toggle('hidden', tab !== 'library');
+      if (tab === 'library') loadLibrary(state.library.path);
+      if (tab === 'tools') loadTools();
+    }
+
+    async function loadPersona() {
+      const cast = getSelectedCast();
+      if (!cast) return;
+      const result = await apiCall('getPersona', { castId: cast.id });
+      if (!result.success) {
+        setSaveState('error', 'Persona failed');
+        return;
+      }
+
+      state.persona = {
+        loadedFor: cast.id,
+        name: result.name || cast.name,
+        color: normalizeHexColor(result.color, cast.color),
+        systemPrompt: result.systemPrompt || ''
+      };
+
+      el.personaName.value = state.persona.name;
+      el.personaColor.value = state.persona.color;
+      el.personaPrompt.value = state.persona.systemPrompt;
+
+      const idx = state.casts.findIndex((c) => c.id === cast.id);
+      if (idx >= 0) {
+        state.casts[idx].name = state.persona.name;
+        state.casts[idx].color = state.persona.color;
+      }
+      renderCastCarousel();
+      setSaveState('saved', 'Saved');
+    }
+
+    function schedulePersonaSave() {
+      const cast = getSelectedCast();
+      if (!cast) return;
+      if (personaSaveTimer) clearTimeout(personaSaveTimer);
+      setSaveState('saving', 'Saving…');
+      personaSaveTimer = setTimeout(() => {
+        savePersona().catch(() => {});
+      }, 520);
+    }
+
+    async function savePersona() {
+      const cast = getSelectedCast();
+      if (!cast) return;
+      const payload = {
+        castId: cast.id,
+        name: String(el.personaName.value || '').trim() || cast.name,
+        color: normalizeHexColor(el.personaColor.value, cast.color),
+        systemPrompt: String(el.personaPrompt.value || '').trim()
+      };
+      const result = await apiCall('savePersona', payload);
+      if (!result.success) {
+        setSaveState('error', 'Save failed');
+        return;
+      }
+
+      const idx = state.casts.findIndex((c) => c.id === cast.id);
+      if (idx >= 0) {
+        state.casts[idx].name = result.name || payload.name;
+        state.casts[idx].color = normalizeHexColor(result.color || payload.color, payload.color);
+      }
+      el.titleMain.textContent = result.name || payload.name;
+      document.documentElement.style.setProperty('--accent', normalizeHexColor(result.color || payload.color, payload.color));
+      renderCastCarousel();
+      setSaveState('saved', 'Saved');
+    }
+
+    function updateLibraryRootButtons() {
+      el.rootButtons.forEach((btn) => {
+        btn.classList.toggle('active', btn.getAttribute('data-root') === state.library.root);
+      });
+    }
+
+    function renderCrumbs(pathValue) {
+      const clean = String(pathValue || '').replace(/^\/+|\/+$/g, '');
+      if (clean === 'documents-hub' || !clean) {
+        el.crumbs.innerHTML = '<span class="crumb-link" data-path="documents-hub">documents</span>';
+        Array.from(el.crumbs.querySelectorAll('[data-path]')).forEach((node) => {
+          node.addEventListener('click', () => {
+            const p = node.getAttribute('data-path');
+            if (!p) return;
+            haptic('light');
+            loadLibrary(p);
+          });
+        });
+        return;
+      }
+      const parts = clean ? clean.split('/') : [];
+      const html = [];
+      for (let i = 0; i < parts.length; i += 1) {
+        const partial = parts.slice(0, i + 1).join('/');
+        html.push(`<span class="crumb-link" data-path="${escapeHtml(partial)}">${escapeHtml(parts[i])}</span>`);
+        if (i < parts.length - 1) html.push('<span>/</span>');
+      }
+      el.crumbs.innerHTML = html.length ? html.join(' ') : '<span>/</span>';
+      Array.from(el.crumbs.querySelectorAll('[data-path]')).forEach((node) => {
+        node.addEventListener('click', () => {
+          const p = node.getAttribute('data-path');
+          if (!p) return;
+          haptic('light');
+          loadLibrary(p);
+        });
+      });
+    }
+
+    function renderLibraryList() {
+      const items = Array.isArray(state.library.items) ? state.library.items : [];
+      if (!items.length) {
+        el.libraryList.innerHTML = '<div class="empty">No files in this folder.</div>';
+        return;
+      }
+
+      el.libraryList.innerHTML = items.map((item) => {
+        const isFolder = item.type === 'folder';
+        const icon = isFolder ? '📁' : iconForFile(item.name);
+        const rootBadge = state.library.path === 'documents-hub'
+          ? `[${String(item.rootLabel || '').toUpperCase()}] `
+          : '';
+        const meta = isFolder
+          ? `${Number(item.itemCount || 0)} items`
+          : formatBytes(item.size);
+        const disableDelete = !!item.readOnly;
+        return `
+          <div class="file-row">
+            <div class="file-icon">${icon}</div>
+            <div class="file-main" data-open="${escapeHtml(item.path || '')}" data-folder="${isFolder ? '1' : '0'}">
+              <strong>${escapeHtml(item.name || item.path || '')}</strong>
+              <span>${escapeHtml(rootBadge + meta)}</span>
+            </div>
+            ${disableDelete ? '' : `<button class="mini-btn" data-delete="${escapeHtml(item.path || '')}" type="button">✕</button>`}
+          </div>
+        `;
+      }).join('');
+
+      Array.from(el.libraryList.querySelectorAll('[data-open]')).forEach((node) => {
+        node.addEventListener('click', () => {
+          const p = node.getAttribute('data-open');
+          const isFolder = node.getAttribute('data-folder') === '1';
+          if (!p) return;
+          if (isFolder) {
+            haptic('light');
+            loadLibrary(p);
+          }
+        });
+      });
+
+      Array.from(el.libraryList.querySelectorAll('[data-delete]')).forEach((node) => {
+        node.addEventListener('click', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const p = node.getAttribute('data-delete');
+          if (!p) return;
+          if (!confirm(`Delete "${p}"?`)) return;
+          haptic('medium');
+          const cast = getSelectedCast();
+          if (!cast) return;
+          const result = await apiCall('deleteFile', { castId: cast.id, filePath: p, recursive: true });
+          if (!result.success) {
+            setSaveState('error', 'Delete failed');
+            return;
+          }
+          setSaveState('saved', 'Deleted');
+          loadLibrary(state.library.path);
+        });
+      });
+    }
+
+    async function loadLibrary(pathValue) {
+      const cast = getSelectedCast();
+      if (!cast) return;
+      const target = String(pathValue || state.library.path || state.library.root || 'documents-hub').replace(/^\/+/, '') || 'documents-hub';
+
+      if (target === 'documents-hub') {
+        state.library.root = 'documents-hub';
+        state.library.path = 'documents-hub';
+        updateLibraryRootButtons();
+
+        const roots = ['docs', 'documents', 'context'];
+        const responses = await Promise.all(
+          roots.map((directory) => apiCall('listFiles', { castId: cast.id, directory }))
+        );
+        const hubItems = [];
+        responses.forEach((result, idx) => {
+          const root = roots[idx];
+          if (!result || !result.success) return;
+          const items = Array.isArray(result.items) ? result.items : [];
+          items.forEach((item) => {
+            const itemPath = String(item.path || '');
+            const rootLabel = itemPath.split('/')[0] || root;
+            hubItems.push({
+              ...item,
+              rootLabel
+            });
+          });
+        });
+        hubItems.sort((a, b) => {
+          if ((a.type === 'folder') !== (b.type === 'folder')) {
+            return a.type === 'folder' ? -1 : 1;
+          }
+          return String(a.name || '').localeCompare(String(b.name || ''));
+        });
+        state.library.items = hubItems;
+        renderCrumbs('documents-hub');
+        renderLibraryList();
+        return;
+      }
+
+      if (!target.includes('/')) {
+        state.library.root = target;
+      } else {
+        const first = target.split('/')[0];
+        if (first) state.library.root = 'documents-hub';
+      }
+      updateLibraryRootButtons();
+
+      const result = await apiCall('listFiles', { castId: cast.id, directory: target });
+      if (!result.success) {
+        el.libraryList.innerHTML = `<div class="empty">Failed to load library: ${escapeHtml(result.error || 'unknown error')}</div>`;
+        return;
+      }
+
+      state.library.path = target;
+      state.library.items = Array.isArray(result.items) ? result.items : [];
+      renderCrumbs(target);
+      renderLibraryList();
+    }
+
+    async function uploadDocuments(files) {
+      const cast = getSelectedCast();
+      if (!cast) return;
+      if (!files || files.length === 0) return;
+      setSaveState('saving', 'Uploading…');
+
+      const form = new FormData();
+      form.append('castId', cast.id);
+      const currentDirectory = state.library.path === 'documents-hub'
+        ? 'documents'
+        : (state.library.path || state.library.root || 'documents');
+      form.append('directory', currentDirectory);
+      Array.from(files).forEach((file) => {
+        form.append('files', file);
+      });
+
+      try {
+        const response = await fetch(`${API_BASE}/api/cast-manager/upload`, { method: 'POST', body: form });
+        const result = await response.json();
+        if (!result.success) {
+          setSaveState('error', 'Upload failed');
+          return;
+        }
+        setSaveState('saved', `Uploaded ${result.uploaded || files.length}`);
+        await loadLibrary(state.library.path);
+      } catch (_) {
+        setSaveState('error', 'Upload failed');
+      }
+    }
+
+    async function createFolder() {
+      const cast = getSelectedCast();
+      if (!cast) return;
+      const promptLabel = state.library.path === 'documents-hub'
+        ? 'Folder name (optional prefix: docs/, documents/, context/)'
+        : 'Folder name';
+      const name = prompt(promptLabel);
+      if (!name) return;
+      const cleaned = String(name).trim().replace(/^\/+|\/+$/g, '').replace(/\s+/g, '-');
+      if (!cleaned) return;
+      let base = String(state.library.path || state.library.root || 'documents').replace(/\/+$/, '');
+      let suffix = cleaned;
+      if (state.library.path === 'documents-hub') {
+        const m = cleaned.match(/^(docs|documents|context)\/(.+)$/i);
+        if (m) {
+          base = m[1].toLowerCase();
+          suffix = m[2];
+        } else {
+          base = 'documents';
+        }
+      }
+      const folderPath = `${base}/${suffix}`;
+      const result = await apiCall('createFolder', { castId: cast.id, folderPath });
+      if (!result.success) {
+        setSaveState('error', 'Create folder failed');
+        return;
+      }
+      setSaveState('saved', 'Folder created');
+      loadLibrary(state.library.path === 'documents-hub' ? 'documents-hub' : state.library.path);
+    }
+
+    function renderToolsList() {
+      const search = String(el.toolSearch.value || '').trim().toLowerCase();
+      const tools = Array.isArray(state.tools.availableTools) ? state.tools.availableTools : [];
+      const selected = new Set(Array.isArray(state.tools.allowedTools) ? state.tools.allowedTools : []);
+      const allowlistOn = state.tools.mode === 'allowlist' && selected.size > 0;
+
+      el.toolModeHint.textContent = allowlistOn
+        ? `Allowlist active (${selected.size} selected)`
+        : 'All tools allowed (no restriction)';
+
+      const visible = tools.filter((tool) => {
+        if (!search) return true;
+        const hay = `${tool.id || ''} ${tool.name || ''} ${tool.description || ''}`.toLowerCase();
+        return hay.includes(search);
+      });
+
+      if (!tools.length) {
+        el.toolsList.innerHTML = '<div class="empty">No skills/tools discovered on this instance.</div>';
+      } else if (!visible.length) {
+        el.toolsList.innerHTML = '<div class="empty">No tools match your search.</div>';
+      } else {
+        el.toolsList.innerHTML = visible.map((tool) => {
+          const id = String(tool.id || '');
+          const enabled = allowlistOn && selected.has(id);
+          return `
+            <div class="tool-row ${enabled ? 'enabled' : ''}">
+              <div class="tool-main">
+                <strong>${escapeHtml(tool.name || id)}</strong>
+                <code>${escapeHtml(id)}</code>
+                <p>${escapeHtml(tool.description || 'No description')}</p>
+              </div>
+              <button class="toggle-btn ${enabled ? 'enabled' : ''}" data-tool-id="${encodeURIComponent(id)}" type="button">${enabled ? 'Remove' : 'Add'}</button>
+            </div>
+          `;
+        }).join('');
+
+        Array.from(el.toolsList.querySelectorAll('[data-tool-id]')).forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const id = decodeURIComponent(btn.getAttribute('data-tool-id') || '');
+            if (!id) return;
+            await toggleTool(id);
+          });
+        });
+      }
+
+      if (Array.isArray(state.tools.missingTools) && state.tools.missingTools.length > 0) {
+        el.toolWarning.style.display = 'block';
+        el.toolWarning.innerHTML = `Missing tools from this allowlist:<br>${state.tools.missingTools.map((id) => `- ${escapeHtml(id)}`).join('<br>')}`;
+      } else {
+        el.toolWarning.style.display = 'none';
+        el.toolWarning.textContent = '';
+      }
+    }
+
+    async function loadTools() {
+      const cast = getSelectedCast();
+      if (!cast) return;
+      const result = await apiCall('getCastTools', { castId: cast.id });
+      if (!result.success) {
+        el.toolsList.innerHTML = `<div class="empty">Failed to load tools: ${escapeHtml(result.error || 'unknown error')}</div>`;
+        return;
+      }
+      state.tools = {
+        mode: result.mode === 'allowlist' ? 'allowlist' : 'all',
+        allowedTools: Array.isArray(result.allowedTools) ? result.allowedTools : [],
+        availableTools: Array.isArray(result.availableTools) ? result.availableTools : [],
+        missingTools: Array.isArray(result.missingTools) ? result.missingTools : []
+      };
+      renderToolsList();
+    }
+
+    async function applyToolList(nextList) {
+      const cast = getSelectedCast();
+      if (!cast) return;
+      if (state.tools.toolsSaving) return;
+      state.tools.toolsSaving = true;
+      setSaveState('saving', 'Saving tools…');
+      const result = await apiCall('setCastTools', { castId: cast.id, allowedTools: nextList });
+      state.tools.toolsSaving = false;
+      if (!result.success) {
+        setSaveState('error', 'Tool save failed');
+        return;
+      }
+      state.tools.mode = result.mode === 'allowlist' ? 'allowlist' : 'all';
+      state.tools.allowedTools = Array.isArray(result.allowedTools) ? result.allowedTools : [];
+      setSaveState('saved', 'Saved');
+      renderToolsList();
+    }
+
+    async function toggleTool(toolId) {
+      const next = new Set(Array.isArray(state.tools.allowedTools) ? state.tools.allowedTools : []);
+      if (next.has(toolId)) next.delete(toolId); else next.add(toolId);
+      haptic('light');
+      await applyToolList(Array.from(next));
+    }
+
+    async function clearToolRestrictions() {
+      haptic('medium');
+      await applyToolList([]);
+    }
+
+    function openContextSheetModal() {
+      if (!el.contextSheetModal) return;
+      el.contextSheetModal.classList.add('show');
+    }
+
+    function closeContextSheetModal() {
+      if (!el.contextSheetModal) return;
+      el.contextSheetModal.classList.remove('show');
+    }
+
+    function updateContextSheetMeta(message) {
+      if (!el.contextSheetMeta) return;
+      el.contextSheetMeta.textContent = message;
+    }
+
+    async function refreshSharedContextSheet() {
+      const result = await apiCall('getSharedContextSheet');
+      if (!result.success || !result.sheet) {
+        updateContextSheetMeta(`Failed to load context sheet: ${result.error || 'unknown error'}`);
+        return false;
+      }
+      state.sharedSheet = {
+        text: String(result.sheet.text || ''),
+        source: String(result.sheet.source || ''),
+        updatedAt: result.sheet.updatedAt || null
+      };
+      if (el.contextSheetText) {
+        el.contextSheetText.value = state.sharedSheet.text;
+      }
+      updateContextSheetMeta(`Source: ${state.sharedSheet.source || 'unknown'} | Updated: ${formatTimestamp(state.sharedSheet.updatedAt)}`);
+      return true;
+    }
+
+    async function openSharedContextSheet() {
+      haptic('light');
+      openContextSheetModal();
+      updateContextSheetMeta('Loading context sheet…');
+      if (el.contextSheetPrompt) {
+        el.contextSheetPrompt.value = '';
+      }
+      await refreshSharedContextSheet();
+    }
+
+    async function saveSharedContextSheet() {
+      const content = String(el.contextSheetText && el.contextSheetText.value ? el.contextSheetText.value : '').trim();
+      if (!content) {
+        updateContextSheetMeta('Context sheet cannot be empty.');
+        return;
+      }
+      setSaveState('saving', 'Saving context sheet…');
+      const result = await apiCall('updateSharedContextSheet', {
+        mode: 'replace',
+        content
+      });
+      if (!result.success) {
+        setSaveState('error', 'Context sheet save failed');
+        updateContextSheetMeta(`Save failed: ${result.error || 'unknown error'}`);
+        return;
+      }
+      setSaveState('saved', 'Context sheet saved');
+      await refreshSharedContextSheet();
+    }
+
+    async function applyContextPromptEdit() {
+      const promptText = String(el.contextSheetPrompt && el.contextSheetPrompt.value ? el.contextSheetPrompt.value : '').trim();
+      if (!promptText) {
+        updateContextSheetMeta('Prompt edit is empty.');
+        return;
+      }
+      setSaveState('saving', 'Applying prompt edit…');
+      const result = await apiCall('applyContextPromptEdit', {
+        prompt: promptText
+      });
+      if (!result.success) {
+        setSaveState('error', 'Prompt edit failed');
+        updateContextSheetMeta(`Prompt edit failed: ${result.error || 'unknown error'}`);
+        return;
+      }
+
+      if (result.applied) {
+        setSaveState('saved', 'Prompt edit applied');
+      } else if (result.pending) {
+        setSaveState('saved', 'Prompt edit captured (pending)');
+      } else {
+        setSaveState('saved', 'No edit intent detected');
+      }
+      await refreshSharedContextSheet();
+    }
+
+    function openCreateModal() {
+      el.createCastName.value = '';
+      el.createCastColor.value = fallbackColor(`new-${Date.now()}`);
+      el.createModal.classList.add('show');
+      setTimeout(() => el.createCastName.focus(), 30);
+    }
+
+    function closeCreateModal() {
+      el.createModal.classList.remove('show');
+    }
+
+    async function createCastNow() {
+      const name = String(el.createCastName.value || '').trim();
+      if (!name) return;
+      const color = normalizeHexColor(el.createCastColor.value, fallbackColor(name));
+      setSaveState('saving', 'Creating cast…');
+      const result = await apiCall('createCastByName', { name, color });
+      if (!result.success) {
+        setSaveState('error', 'Create failed');
+        return;
+      }
+      await loadCasts();
+      closeCreateModal();
+      const castId = result.cast && result.cast.id ? result.cast.id : null;
+      if (castId) {
+        showEditorView(castId);
+      } else {
+        showPickerView();
+      }
+      setSaveState('saved', 'Cast created');
+    }
+
+    async function deleteCurrentCast() {
+      const cast = getSelectedCast();
+      if (!cast) return;
+      const confirmed = window.confirm(`Delete cast "${cast.name}" (${cast.id})? This removes the cast and all files.`);
+      if (!confirmed) return;
+      haptic('heavy');
+      setSaveState('saving', 'Deleting cast…');
+      const result = await apiCall('deleteCast', { castId: cast.id });
+      if (!result.success) {
+        setSaveState('error', 'Delete failed');
+        return;
+      }
+      await loadCasts();
+      showPickerView();
+      setSaveState('saved', 'Cast deleted');
+    }
+
+    function bindEvents() {
+      el.backBtn.addEventListener('click', () => {
+        haptic('light');
+        showPickerView();
+      });
+      if (el.deleteCastBtn) {
+        el.deleteCastBtn.addEventListener('click', () => {
+          deleteCurrentCast().catch(() => setSaveState('error', 'Delete failed'));
+        });
+      }
+
+      el.tabButtons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const tab = btn.getAttribute('data-tab');
+          if (!tab) return;
+          haptic('light');
+          setActiveTab(tab);
+        });
+      });
+
+      el.personaName.addEventListener('input', schedulePersonaSave);
+      el.personaColor.addEventListener('input', schedulePersonaSave);
+      el.personaPrompt.addEventListener('input', schedulePersonaSave);
+
+      el.rootButtons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const root = btn.getAttribute('data-root');
+          if (!root) return;
+          haptic('light');
+          state.library.root = root;
+          loadLibrary(root);
+        });
+      });
+
+      el.refreshLibraryBtn.addEventListener('click', () => loadLibrary(state.library.path));
+      el.createFolderBtn.addEventListener('click', createFolder);
+
+      el.uploadFab.addEventListener('click', () => {
+        haptic('light');
+        el.uploadInput.click();
+      });
+      el.uploadInput.addEventListener('change', async () => {
+        await uploadDocuments(el.uploadInput.files);
+        el.uploadInput.value = '';
+      });
+
+      el.allowAllToolsBtn.addEventListener('click', clearToolRestrictions);
+      el.refreshToolsBtn.addEventListener('click', loadTools);
+      el.toolSearch.addEventListener('input', renderToolsList);
+
+      el.cancelCreateBtn.addEventListener('click', closeCreateModal);
+      el.confirmCreateBtn.addEventListener('click', createCastNow);
+      el.createModal.addEventListener('click', (event) => {
+        if (event.target === el.createModal) closeCreateModal();
+      });
+
+      if (el.openSharedSheetBtn) {
+        el.openSharedSheetBtn.addEventListener('click', openSharedContextSheet);
+      }
+      if (el.closeContextSheetBtn) {
+        el.closeContextSheetBtn.addEventListener('click', closeContextSheetModal);
+      }
+      if (el.saveContextSheetBtn) {
+        el.saveContextSheetBtn.addEventListener('click', saveSharedContextSheet);
+      }
+      if (el.applyContextPromptBtn) {
+        el.applyContextPromptBtn.addEventListener('click', applyContextPromptEdit);
+      }
+      if (el.contextSheetModal) {
+        el.contextSheetModal.addEventListener('click', (event) => {
+          if (event.target === el.contextSheetModal) closeContextSheetModal();
+        });
+      }
+    }
+
+    async function init() {
+      bindEvents();
+      const connected = await findWorkingEndpoint();
+      if (!connected) {
+        el.castCarousel.innerHTML = '<div class="empty">Cannot connect to Cast API.</div>';
+        setSaveState('error', 'Offline');
+        return;
+      }
+      const ok = await loadCasts();
+      if (!ok) return;
+      showPickerView();
+    }
+
+    init();
+  </script>
+</body>
+</html>

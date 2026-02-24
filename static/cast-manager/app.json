@@ -1,0 +1,12 @@
+{
+  "id": "cast-manager",
+  "title": "Cast Manager",
+  "description": "Manage cast personas, profiles, and context",
+  "icon": "\ud83c\udfad",
+  "version": "1.0.0",
+  "author": "OpenClaw",
+  "category": "productivity",
+  "width": 800,
+  "height": 600,
+  "url": "/cast-manager/redesigned.html?v=20260224-context-v2-ui"
+}

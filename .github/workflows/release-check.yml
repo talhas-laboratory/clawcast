@@ -1,0 +1,44 @@
+name: release-check
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Pack dry run
+        run: npm pack --dry-run
+
+      - name: Optional forge checks
+        run: |
+          if command -v forge >/dev/null 2>&1; then
+            forge verify
+            forge test --skip-install-deps
+          else
+            echo "forge not installed in runner; skipping forge checks"
+          fi

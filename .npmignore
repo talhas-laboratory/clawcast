@@ -1,0 +1,21 @@
+# Exclude local backup artifacts from published package
+*.bak
+*.bak.*
+*~
+
+# Exclude nested backup artifacts
+**/*.bak
+**/*.bak.*
+**/*~
+
+# Exclude local backup/work dirs
+backups/
+**/backups/
+
+# Exclude transient and test artifacts
+*.log
+coverage/
+.nyc_output/
+
+# Forge-generated artifacts should not be published
+.forge/
