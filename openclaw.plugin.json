@@ -2,7 +2,7 @@
   "id": "clawcast",
   "name": "ClawCast",
   "description": "ClawCast for OpenClaw: cast/persona management with shared context and Cast Manager UI",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
