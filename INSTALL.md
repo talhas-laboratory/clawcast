@@ -13,7 +13,7 @@ openclaw plugins install @talhas-laboratory/clawcast
 From package archive (`.tgz`):
 
 ```bash
-openclaw plugins install /absolute/path/to/talhas-laboratory-clawcast-1.0.0.tgz
+openclaw plugins install /absolute/path/to/talhas-laboratory-clawcast-1.0.1.tgz
 ```
 
 For local development source:
@@ -78,3 +78,17 @@ If install does not auto-register, add this in `~/.openclaw/openclaw.json`:
 ```
 
 Then restart gateway.
+
+
+## Security scanner note
+
+ClawCast does not read environment variables to exfiltrate credentials.
+
+If your environment reports static-analysis warnings, inspect the flagged lines and confirm they are configuration/runtime routing logic only.
+
+Recommended verification:
+
+```bash
+openclaw plugins doctor
+openclaw plugins list
+```

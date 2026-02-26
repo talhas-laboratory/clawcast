@@ -1,6 +1,6 @@
 {
   "name": "@talhas-laboratory/clawcast",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "ClawCast for OpenClaw: cast/persona management with shared context and Cast Manager UI",
   "type": "commonjs",
   "main": "dist/index.js",

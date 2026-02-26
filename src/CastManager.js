@@ -33,10 +33,15 @@ class CastManager {
   async loadCasts() {
     await this.logger.info('Loading casts...');
     const startTime = Date.now();
-    
+    const previousActiveCastId = this.activeCast && this.activeCast.id ? this.activeCast.id : null;
+
     // Load persisted state
     await this.stateManager.load();
-    
+
+    // Rebuild cache from disk every time so file-based edits are reflected immediately.
+    this.casts.clear();
+    this.activeCast = null;
+
     try {
       const entries = await fs.readdir(this.castsDir, { withFileTypes: true });
       
@@ -56,8 +61,8 @@ class CastManager {
         }
       }
       
-      // Restore active cast from state
-      const savedActiveCast = this.stateManager.getActiveCast();
+      // Restore active cast from state (fallback to previous in-memory active cast id).
+      const savedActiveCast = this.stateManager.getActiveCast() || previousActiveCastId;
       if (savedActiveCast && this.casts.has(savedActiveCast)) {
         this.activeCast = this.casts.get(savedActiveCast);
         await this.logger.info(`Restored active cast: ${savedActiveCast}`);

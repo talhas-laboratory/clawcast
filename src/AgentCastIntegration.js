@@ -12,8 +12,10 @@ const fs = require('fs').promises;
 const path = require('path');
 
 class AgentCastIntegration {
-  constructor() {
-    this.workspaceRoot = process.env.OPENCLAW_WORKSPACE_DIR || process.cwd();
+  constructor(options = {}) {
+    this.workspaceRoot = typeof options.workspaceRoot === 'string' && options.workspaceRoot.trim()
+      ? options.workspaceRoot.trim()
+      : process.cwd();
     this.castsDir = path.join(this.workspaceRoot, 'casts');
     this.stateFile = path.join(this.castsDir, '.agent-state.json');
   }

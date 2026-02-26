@@ -190,9 +190,10 @@ async function pickCastsPath(api, config, pluginRoot) {
   candidates.push('casts');
   candidates.push('./casts');
 
-  if (process.env.HOME) {
-    candidates.push(path.join(process.env.HOME, '.openclaw', 'workspace', 'casts'));
-    candidates.push(path.join(process.env.HOME, '.openclaw', 'casts'));
+  const homeDir = os.homedir();
+  if (homeDir) {
+    candidates.push(path.join(homeDir, '.openclaw', 'workspace', 'casts'));
+    candidates.push(path.join(homeDir, '.openclaw', 'casts'));
   }
 
   candidates.push(path.join(pluginRoot, 'casts'));
@@ -624,7 +625,7 @@ module.exports = function castSystemPlugin(api) {
     if (workspaceRoot && path.basename(workspaceRoot) === 'workspace') {
       return path.dirname(workspaceRoot);
     }
-    const home = process.env.HOME || os.homedir();
+    const home = os.homedir();
     return home ? path.join(home, '.openclaw') : '';
   };
 
@@ -648,14 +649,11 @@ module.exports = function castSystemPlugin(api) {
   };
 
   const discoverSkillRoots = async () => {
-    const home = process.env.HOME || os.homedir();
-    const envRoots = String(process.env.OPENCLAW_SKILLS_DIRS || '')
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean);
+    const home = os.homedir();
+    const envRoots = [];
     const extraDirs = await readOpenclawSkillExtraDirs();
     const openclawHome = resolveOpenclawHomeGuess();
-    const codexHome = process.env.CODEX_HOME ? String(process.env.CODEX_HOME).trim() : '';
+    const codexHome = '';
     const configuredRoots = isObject(config.tools) && Array.isArray(config.tools.skillRoots)
       ? config.tools.skillRoots.map((item) => String(item || '').trim()).filter(Boolean)
       : [];
@@ -1333,6 +1331,13 @@ module.exports = function castSystemPlugin(api) {
   const handleAction = async (action, payload) => {
     const params = isObject(payload) ? payload : {};
     const manager = await ensureInitialized();
+
+    // Keep API and UI in sync with on-disk cast edits created outside this process.
+    try {
+      await manager.loadCasts();
+    } catch (error) {
+      logger.warn(`[CastSystem] Could not refresh casts before action ${action}: ${error && error.message ? error.message : error}`);
+    }
 
     const contextV2Result = await handleContextV2Action(action, params, manager);
     if (contextV2Result) {

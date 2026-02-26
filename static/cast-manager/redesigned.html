@@ -1218,25 +1218,37 @@
     }
 
     // --- API discovery ---
-    const API_ENDPOINTS = ['', window.location.origin];
+    const API_ENDPOINTS = Array.from(new Set([
+      '',
+      window.location.origin,
+      `${window.location.origin}/apps`
+    ]));
+    const API_PATHS = ['/api/cast-manager', '/apps/api/cast-manager'];
     let API_BASE = '';
+    let API_PATH = '/api/cast-manager';
+
+    const joinApiUrl = (base, path) => `${String(base || '').replace(/\/$/, '')}${path}`;
 
     async function findWorkingEndpoint() {
       for (const endpoint of API_ENDPOINTS) {
-        try {
-          console.log(`Checking endpoint: ${endpoint}/api/cast-manager`);
-          const response = await fetch(`${endpoint}/api/cast-manager`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'listCasts' })
-          });
-          if (response.ok) {
-            console.log(`Found working API base: ${endpoint}`);
-            API_BASE = endpoint;
-            return true;
+        for (const path of API_PATHS) {
+          try {
+            const probeUrl = joinApiUrl(endpoint, path);
+            console.log(`Checking endpoint: ${probeUrl}`);
+            const response = await fetch(probeUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'listCasts' })
+            });
+            if (response.ok) {
+              console.log(`Found working API route: ${probeUrl}`);
+              API_BASE = endpoint;
+              API_PATH = path;
+              return true;
+            }
+          } catch (e) {
+            console.error(`Endpoint ${endpoint}${path} failed:`, e);
           }
-        } catch (e) {
-          console.error(`Endpoint ${endpoint} failed:`, e);
         }
       }
       return false;
@@ -1244,7 +1256,7 @@
 
     async function apiCall(action, params = {}) {
       try {
-        const response = await fetch(`${API_BASE}/api/cast-manager`, {
+        const response = await fetch(joinApiUrl(API_BASE, API_PATH), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action, ...params })
@@ -1332,6 +1344,58 @@
     };
 
     let personaSaveTimer = null;
+    let castSyncTimer = null;
+    let castSyncInFlight = false;
+
+    function castsSignature(casts) {
+      return JSON.stringify((Array.isArray(casts) ? casts : []).map((cast) => [cast.id, cast.name, cast.color, cast.emoji]));
+    }
+
+    async function syncCastsSilently() {
+      if (castSyncInFlight) return;
+      castSyncInFlight = true;
+      try {
+        const result = await apiCall('listCasts');
+        if (!result.success) return;
+
+        const incoming = (Array.isArray(result.casts) ? result.casts : []).map((cast) => ({
+          id: cast.id,
+          name: cast.name || cast.id,
+          emoji: cast.emoji || '●',
+          color: normalizeHexColor(cast.color, fallbackColor(cast.id)),
+          description: cast.description || ''
+        }));
+
+        const before = castsSignature(state.casts);
+        const after = castsSignature(incoming);
+        if (before === after) return;
+
+        state.casts = incoming;
+
+        if (el.footerNodeCount) {
+          el.footerNodeCount.textContent = String(state.casts.length).padStart(2, '0');
+        }
+
+        if (state.selectedCastId && !state.casts.some((cast) => cast.id === state.selectedCastId)) {
+          showPickerView();
+          return;
+        }
+
+        if (el.pickerView.classList.contains('active')) {
+          renderCastCarousel();
+        }
+      } finally {
+        castSyncInFlight = false;
+      }
+    }
+
+    function startCastSyncPolling() {
+      if (castSyncTimer) clearInterval(castSyncTimer);
+      castSyncTimer = setInterval(() => {
+        if (document.hidden) return;
+        syncCastsSilently().catch(() => {});
+      }, 3000);
+    }
 
     const el = {
       pickerView: document.getElementById('pickerView'),
@@ -1399,6 +1463,7 @@
       el.uploadFab.classList.add('hidden');
       setSaveState('ready', 'Ready');
       renderCastCarousel();
+      syncCastsSilently().catch(() => {});
     }
 
     function getSelectedCast() {
@@ -1896,7 +1961,7 @@
       });
 
       try {
-        const response = await fetch(`${API_BASE}/api/cast-manager/upload`, { method: 'POST', body: form });
+        const response = await fetch(`${joinApiUrl(API_BASE, API_PATH)}/upload`, { method: 'POST', body: form });
         const result = await response.json();
         if (!result.success) {
           setSaveState('error', 'Upload failed');
@@ -2264,6 +2329,7 @@
       }
       const ok = await loadCasts();
       if (!ok) return;
+      startCastSyncPolling();
       showPickerView();
     }
 

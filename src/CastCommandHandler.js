@@ -11,10 +11,14 @@ const fs = require('fs').promises;
 const path = require('path');
 
 class CastCommandHandler {
-  constructor() {
-    // API base can be overridden for deployments
-    this.apiBase = process.env.CAST_SYSTEM_API_BASE || 'http://127.0.0.1:18789';
-    this.workspaceRoot = process.env.OPENCLAW_WORKSPACE_DIR || process.cwd();
+  constructor(options = {}) {
+    // Keep runtime deterministic and avoid env-based network target overrides.
+    this.apiBase = typeof options.apiBase === 'string' && options.apiBase.trim()
+      ? options.apiBase.trim()
+      : 'http://127.0.0.1:18789';
+    this.workspaceRoot = typeof options.workspaceRoot === 'string' && options.workspaceRoot.trim()
+      ? options.workspaceRoot.trim()
+      : process.cwd();
   }
 
   /**

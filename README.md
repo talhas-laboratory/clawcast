@@ -6,7 +6,7 @@ ClawCast is an OpenClaw plugin for cast/persona management with shared context, 
 
 ## Install
 
-Install from npm spec (recommended for public users):
+Install from npm spec (recommended):
 
 ```bash
 openclaw plugins install @talhas-laboratory/clawcast
@@ -15,7 +15,7 @@ openclaw plugins install @talhas-laboratory/clawcast
 Install from packaged archive (`.tgz`):
 
 ```bash
-openclaw plugins install /absolute/path/to/talhas-laboratory-clawcast-1.0.0.tgz
+openclaw plugins install /absolute/path/to/talhas-laboratory-clawcast-1.0.1.tgz
 ```
 
 Install from local development source:
@@ -35,18 +35,114 @@ openclaw plugins doctor
 
 - Canonical UI: `/cast-manager/`
 - Canonical app page: `/cast-manager/redesigned.html`
-- Legacy alias: `/cast-system/` (HTTP redirect to `/cast-manager/`)
+- Legacy alias: `/cast-system/` (redirects to `/cast-manager/`)
+- API: `POST /api/cast-manager`
+- Health: `GET /health`
 
-Example local browser URL:
+---
 
+## One-Shot Setup Tutorials
+
+### 1) Browser only (no Telegram mini app)
+Use this if users open ClawCast directly in browser.
+
+```bash
+openclaw gateway --allow-unconfigured --bind loopback --port 19001 --force
+```
+
+Open:
 - `http://127.0.0.1:19001/cast-manager/`
 
-## API
+No `miniapps.config.baseUrl` is required for browser-only usage.
 
-- `POST /api/cast-manager`
-- `GET /health`
+### 2) VPS + public HTTPS domain (phone + browser + Telegram mini app)
+Use this if users run OpenClaw on VPS and access from phone.
 
-Common actions:
+1. Keep gateway local:
+
+```bash
+openclaw gateway --allow-unconfigured --bind loopback --port 19001 --force
+```
+
+2. Put reverse proxy in front (Nginx/Caddy/Traefik) to expose HTTPS domain.
+3. Set miniapps base URL in `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "miniapps": {
+        "config": {
+          "baseUrl": "https://your-domain-or-tailnet/apps",
+          "appsRoot": "~/.openclaw/workspace/apps/miniapps"
+        }
+      }
+    }
+  }
+}
+```
+
+4. Restart gateway.
+
+Then:
+- Browser users: `https://your-domain-or-tailnet/cast-manager/`
+- Telegram users: `/cast manager` opens mini app link from same origin.
+
+### 3) VPS + Tailscale Serve (no public internet exposure)
+Use this for private mobile access.
+
+1. Run gateway on loopback (same as above).
+2. Expose with Tailscale Serve HTTPS.
+3. Set:
+
+- `plugins.entries.miniapps.config.baseUrl = "https://<your-tailnet-host>/apps"`
+
+4. Restart gateway.
+
+Then open:
+- `https://<your-tailnet-host>/cast-manager/`
+
+### 4) Telegram mini app creation from scratch
+
+1. Ensure `miniapps` plugin is enabled.
+2. Ensure `miniapps.config.baseUrl` is set (HTTPS).
+3. Ensure app manifest exists at:
+
+- `~/.openclaw/workspace/apps/miniapps/cast-manager/app.json`
+
+4. Confirm URL in manifest points to ClawCast app route:
+
+```json
+{
+  "url": "/cast-manager/redesigned.html"
+}
+```
+
+5. Restart gateway and run `/cast manager` in Telegram.
+
+If Telegram says `Cast manager is not configured yet`, it means `miniapps.config.baseUrl` is missing or invalid.
+
+---
+
+## URL behavior by channel
+
+- Telegram mini app: requires `miniapps.config.baseUrl`.
+- Browser web app: does not require miniapps base URL if opened directly on reachable gateway URL.
+- Backend cast features (`/cast`, `/context`, API tools): work across channels regardless of mini app embedding.
+
+## Security scanner note
+
+Some environments run heuristic static checks during plugin installation.
+
+ClawCast does not use environment-variable credential forwarding logic for exfiltration. If warnings appear, review flagged lines and run:
+
+```bash
+openclaw plugins doctor
+openclaw plugins list
+```
+
+## Common actions
+
 - `listCasts`
 - `switchCast`
 - `getPromptContext`
@@ -56,18 +152,6 @@ Common actions:
 - `listContractRules`
 - `setContractRule`
 - `removeContractRule`
-
-## Telegram + non-Telegram nuance
-
-- Telegram mini app embedding is Telegram-specific.
-- The same frontend can still be opened by non-Telegram users in browser via `/cast-manager/`.
-- All channels can use backend capabilities (`/cast`, `/context`, tools, and API endpoints), even without mini app embedding.
-
-## Current known limitations
-
-- Deep semantic retrieval is lexical-plus first; vector retrieval is optional and not mandatory for setup.
-- Plugin health checks can show unrelated warnings if other installed plugins are broken.
-- Cast quality depends on cast profile + document hygiene; stale documents can reduce answer quality.
 
 ## Compatibility
 

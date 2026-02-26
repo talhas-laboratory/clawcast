@@ -72,3 +72,13 @@ Health route:
 ## Publish stop point
 
 Stop before publishing; hand off to owner for npm auth and `npm publish`.
+
+
+## Security scanner behavior
+
+If install-time static analysis raises warnings, the agent should:
+
+1. Report exact flagged file/line.
+2. Explain whether the pattern is configuration use or credential exfiltration.
+3. Ask user approval before restart.
+4. Run `openclaw plugins doctor` after install/restart.
