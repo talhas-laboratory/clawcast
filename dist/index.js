@@ -182,13 +182,16 @@ function normalizePathCandidate(api, candidate) {
 
 async function pickCastsPath(api, config, pluginRoot) {
   const candidates = [];
+  const rawConfiguredCastsPath = typeof config.castsPath === 'string'
+    ? config.castsPath.trim()
+    : '';
+  const hasExplicitCastsPath = !!rawConfiguredCastsPath
+    && rawConfiguredCastsPath !== 'casts'
+    && rawConfiguredCastsPath !== './casts';
 
-  if (typeof config.castsPath === 'string' && config.castsPath.trim()) {
-    candidates.push(config.castsPath.trim());
+  if (hasExplicitCastsPath) {
+    candidates.push(rawConfiguredCastsPath);
   }
-
-  candidates.push('casts');
-  candidates.push('./casts');
 
   const homeDir = os.homedir();
   if (homeDir) {
@@ -196,6 +199,8 @@ async function pickCastsPath(api, config, pluginRoot) {
     candidates.push(path.join(homeDir, '.openclaw', 'casts'));
   }
 
+  candidates.push('casts');
+  candidates.push('./casts');
   candidates.push(path.join(pluginRoot, 'casts'));
 
   const normalized = candidates
@@ -208,7 +213,23 @@ async function pickCastsPath(api, config, pluginRoot) {
     }
   }
 
-  const fallback = normalized[0] || path.join(process.cwd(), 'casts');
+  for (const candidate of normalized) {
+    const resolved = path.resolve(candidate);
+    const isRootChild = path.dirname(resolved) === path.parse(resolved).root;
+    if (!hasExplicitCastsPath && isRootChild) {
+      continue;
+    }
+    try {
+      await fsp.mkdir(resolved, { recursive: true });
+      return resolved;
+    } catch {
+      // Try next writable candidate.
+    }
+  }
+
+  const fallback = homeDir
+    ? path.join(homeDir, '.openclaw', 'workspace', 'casts')
+    : path.join(os.tmpdir(), 'openclaw-casts');
   await fsp.mkdir(fallback, { recursive: true });
   return fallback;
 }

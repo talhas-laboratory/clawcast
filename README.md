@@ -15,7 +15,7 @@ openclaw plugins install @talhas-laboratory/clawcast
 Install from packaged archive (`.tgz`):
 
 ```bash
-openclaw plugins install /absolute/path/to/talhas-laboratory-clawcast-1.0.1.tgz
+openclaw plugins install /absolute/path/to/talhas-laboratory-clawcast-1.0.2.tgz
 ```
 
 Install from local development source:
